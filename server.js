@@ -18,6 +18,7 @@ import { gemini, aiEnabled, MODELS } from './lib/gemini.js';
 import { ecobotAnswer, parseListing, upcycleFor } from './lib/ecobot.js';
 import { PRICES, CO2_PER_KG, materialKey } from './lib/materials.js';
 import { findHubs } from './lib/hubs.js';
+import { TEST_IMAGE } from './lib/selftest-image.js';
 import { googleHubs, placesStatus } from './lib/places.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -89,6 +90,10 @@ app.get('/api/status', wrap(async (req, res) => {
   if (aiEnabled()) {
     try { const t = await gemini({ prompt: 'Reply with the single word: ready' }); out.gemini.ok = /ready/i.test(t); out.gemini.reply = t.slice(0, 40); }
     catch (e) { out.gemini.ok = false; out.gemini.error = e.message.slice(0, 200); }
+    try { const t = await gemini({ system: ECOBOT_SYSTEM, history: [{ role: 'model', text: 'Namaste! Ask me anything.' }, { role: 'user', text: 'Akhbaar ka rate kya hai?' }] }); out.gemini.chat = { ok: true, reply: t.slice(0, 80) }; }
+    catch (e) { out.gemini.chat = { ok: false, error: e.message.slice(0, 200) }; }
+    try { const r = await gemini({ prompt: SCAN_PROMPT, image: TEST_IMAGE, mime: 'image/jpeg', json: true }); out.gemini.scan = { ok: !!r.item, item: r.item, material: materialKey(r.material) }; }
+    catch (e) { out.gemini.scan = { ok: false, error: e.message.slice(0, 200) }; }
   }
   if (process.env.GOOGLE_MAPS_API_KEY) { const r = await googleHubs(28.6139, 77.209, 5000).catch(() => []); out.places.ok = placesStatus.ok ?? r.length > 0; out.places.results = r.length; if (placesStatus.error) out.places.error = placesStatus.error.slice(0, 200); }
   statusCache = { at: Date.now(), data: out };
@@ -133,15 +138,16 @@ app.post('/api/ai/scan', limit('ai', 15), wrap(async (req, res) => {
   const { image, mime = 'image/jpeg' } = req.body || {};
   if (!image || image.length > 7_000_000) return res.status(400).json({ error: 'Add a photo under 5 MB.' });
   try { const r = await gemini({ prompt: SCAN_PROMPT, image, mime, json: true }); res.json({ ...r, material: materialKey(r.material), source: 'gemini' }); }
-  catch { res.status(502).json({ error: 'The scanner is busy. Try again in a moment.' }); }
+  catch (e) { console.error('AI scan failed:', e.message); res.status(502).json({ error: 'The scanner is busy. Try again in a moment.' }); }
 }));
+const ECOBOT_SYSTEM = 'You are EcoBot inside EcoSync, a recycling app in India. Reply in the user\'s language (Hindi, Hinglish or English), under 110 words, practical and local. Use short bullet points for lists.';
 app.post('/api/ai/chat', limit('ai', 30), wrap(async (req, res) => {
   const msgs = (req.body.messages || []).slice(-12).map((m) => ({ role: m.role === 'user' ? 'user' : 'model', text: clean(m.text, 1200) })).filter((m) => m.text);
   if (!msgs.length) return res.status(400).json({ error: 'Type a question first.' });
   if (aiEnabled()) {
-    try { return res.json({ text: await gemini({ system: 'You are EcoBot inside EcoSync, a recycling app in India. Reply in the user\'s language (Hindi, Hinglish or English), under 110 words, practical and local.', history: msgs }) }); } catch { /* use built-in answers */ }
+    try { return res.json({ text: await gemini({ system: ECOBOT_SYSTEM, history: msgs }), source: 'gemini' }); } catch (e) { console.error('AI chat failed:', e.message); }
   }
-  res.json({ text: ecobotAnswer(msgs.at(-1).text) });
+  res.json({ text: ecobotAnswer(msgs.at(-1).text), source: 'builtin' });
 }));
 app.post('/api/ai/parse-listing', wrap(async (req, res) => {
   const text = clean(req.body.text, 400);
