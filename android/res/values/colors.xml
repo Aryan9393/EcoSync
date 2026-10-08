@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#ff0f1f1d</color>
-    <color name="accent">#ff3ee0a8</color>
+    <color name="bg">#ff0a0a0a</color>
+    <color name="accent">#ff7fe3b4</color>
 </resources>

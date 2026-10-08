@@ -4,48 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>EcoSync</title>
-<meta name="description" content="EcoSync turns household scrap into money and points: scan it with AI, sell it to nearby recyclers, book a pickup, and follow every kilo with a QR material passport.">
-<meta name="theme-color" content="#0f1f1d">
+<meta name="description" content="A second life for your scrap. Scan it, sell it to a collector nearby, and follow it to its next life with a QR material passport.">
+<meta name="theme-color" content="#0a0a0a">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/logo.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="preload" href="fonts/instrument-serif.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/manrope.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs></svg>
-<!-- Logo introduction -->
+<div class="progress" id="progress"></div>
 <div id="intro" class="intro" aria-hidden="true">
   <div class="intro-stage">
-    <svg class="intro-mark" viewBox="0 0 120 120" aria-hidden="true">
-      <defs>
-        <linearGradient id="ig" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient>
-      </defs>
-      <g fill="none" stroke="url(#ig)" stroke-width="9" stroke-linecap="round">
-        <path class="arc a1" d="M72.13 17.7 A44 44 0 0 1 104 60"/>
-        <path class="arc a2" d="M90.56 91.65 A44 44 0 0 1 38 98.11"/>
-        <path class="arc a3" d="M17.31 70.64 A44 44 0 0 1 38 21.89"/>
-      </g>
-      <g fill="url(#ig)">
-        <path class="tip t1" d="M103.7 77.77 L114.99 60.96 L92.99 60.58Z"/>
-        <path class="tip t2" d="M22.77 88.96 L31.67 107.14 L43 88.29Z"/>
-        <path class="tip t3" d="M53.54 13.27 L33.34 11.9 L44 31.14Z"/>
-      </g>
-      <circle class="core" cx="60" cy="60" r="11" fill="url(#ig)"/>
-    </svg>
-    <div class="intro-word">EcoSync</div>
-    <div class="intro-line">Every kilo, accounted for.</div>
+    <svg class="intro-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path class="s" d="M12 3.5a8.5 8.5 0 0 1 7.4 4.3"/><path class="s" d="M20.3 13.6a8.5 8.5 0 0 1-8.3 6.9"/><path class="s" d="M7.6 19.3A8.5 8.5 0 0 1 4.2 8.6"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/></svg>
+    <div class="intro-word">ecosync</div>
+    <div class="intro-line">A second life for your scrap.</div>
   </div>
   <button class="intro-skip" type="button">Skip</button>
 </div>
-
-<div id="app" class="app" data-view="landing"></div>
+<div id="app"></div>
 <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 <div id="sheet-root"></div>
-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>

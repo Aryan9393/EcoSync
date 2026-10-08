@@ -1,36 +1,31 @@
-// API client. Talks to the EcoSync server when one is reachable; otherwise falls back to an
-// in-browser preview backend (mock.js) so the app still works as a static preview.
+// API client. Talks to the EcoSync server; when none is reachable (a static preview)
+// it falls back to an in-browser backend that stores data in this browser only.
 import { mock } from './mock.js';
 
-const store = {
+export const store = {
   get(k, d = null) { try { const v = localStorage.getItem('ecosync.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('ecosync.' + k, JSON.stringify(v)); } catch {} },
   del(k) { try { localStorage.removeItem('ecosync.' + k); } catch {} },
 };
-export { store };
-
 const params = new URLSearchParams(location.search);
 if (params.get('api')) store.set('api', params.get('api').replace(/\/$/, ''));
-export let BASE = store.get('api', window.ECOSYNC_API || '');
+export let BASE = store.get('api', '');
 export let backend = 'server';
 
 export async function detect() {
   try {
-    const r = await fetch(BASE + '/api/config', { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) throw new Error();
-    const cfg = await r.json();
-    if (cfg.app !== 'EcoSync') throw new Error();
+    const r = await fetch(BASE + '/api/config', { signal: AbortSignal.timeout(6000) });
+    const cfg = r.ok ? await r.json() : null;
+    if (cfg?.app !== 'EcoSync') throw new Error();
     backend = 'server'; return cfg;
-  } catch {
-    backend = 'preview'; return mock('GET', '/api/config');
-  }
+  } catch { backend = 'preview'; return mock('GET', '/api/config'); }
 }
 export function setBase(url) { BASE = (url || '').replace(/\/$/, ''); store.set('api', BASE); }
 
 export async function api(method, path, body) {
   const token = store.get('token');
   if (backend === 'preview') {
-    await new Promise((r) => setTimeout(r, 180 + Math.random() * 260));
+    await new Promise((r) => setTimeout(r, 120 + Math.random() * 200));
     const out = await mock(method, path, body, token);
     if (out && out.__status) { const e = new Error(out.error); e.status = out.__status; throw e; }
     return out;

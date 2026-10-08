@@ -25,7 +25,6 @@ export function locate(force = false) {
   }).finally(() => { locating = null; });
   return locating;
 }
-
 export async function refreshMe() {
   if (!store.get('token')) return;
   try { const r = await get('/api/me'); S.user = r.user; S.wallet = r.wallet; store.set('user', r.user); }
@@ -34,7 +33,8 @@ export async function refreshMe() {
 export function signOutLocal() { store.del('token'); store.del('user'); S.user = null; S.wallet = null; }
 export const tier = (coins) => {
   const T = [['Seedling', 0], ['Sapling', 500], ['Grove', 1500], ['Forest', 4000], ['Biosphere', 10000]];
-  let i = T.findLastIndex(([, c]) => coins >= c);
-  const [name, min] = T[i]; const next = T[i + 1];
+  const i = T.findLastIndex(([, c]) => coins >= c);
+  const [name, min] = T[Math.max(0, i)], next = T[i + 1];
   return { name, next: next?.[0], need: next ? next[1] - coins : 0, pct: next ? Math.min(100, ((coins - min) / (next[1] - min)) * 100) : 100 };
 };
+export const firstName = (n = '') => n.trim().split(/\s+/)[0] || 'there';

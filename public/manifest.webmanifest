@@ -1,12 +1,12 @@
 {
-  "name": "EcoSync — Scan, sell, recycle",
+  "name": "EcoSync — A second life for your scrap",
   "short_name": "EcoSync",
   "description": "AI scrap scanner, recycling marketplace, pickups, EcoCoins and QR material passports.",
   "start_url": "./#/",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0f1f1d",
-  "theme_color": "#0f1f1d",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
   "orientation": "portrait",
   "categories": ["lifestyle", "utilities", "education"],
   "icons": [
