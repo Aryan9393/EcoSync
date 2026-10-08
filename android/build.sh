@@ -3,7 +3,7 @@
 # Needs Java 11+, apktool 2.x (APKTOOL=path/to/apktool.jar) and either apksigner (Android SDK) or jarsigner.
 set -euo pipefail
 cd "$(dirname "$0")"
-APP_URL="${APP_URL:-https://ecosync-29iu.onrender.com}"
+APP_URL="${APP_URL:-https://ecosync-app.onrender.com}"
 APKTOOL="${APKTOOL:-apktool.jar}"
 OUT="${OUT:-../public/downloads/EcoSync.apk}"
 WORK=$(mktemp -d)
