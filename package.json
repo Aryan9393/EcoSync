@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
+    "build": "echo \"No build step needed\"",
     "dev": "node --watch server.js",
     "gen:images": "node scripts/generate-images.js"
   },
@@ -26,6 +27,6 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
   }
 }
