@@ -18,6 +18,7 @@ import { gemini, aiEnabled, MODELS } from './lib/gemini.js';
 import { ecobotAnswer, parseListing, upcycleFor } from './lib/ecobot.js';
 import { PRICES, CO2_PER_KG, materialKey } from './lib/materials.js';
 import { findHubs } from './lib/hubs.js';
+import { googleHubs, placesStatus } from './lib/places.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -78,7 +79,21 @@ async function award(uid, coins, note, kg = 0, co2 = 0) {
 }
 
 // ---------- config ----------
-app.get('/api/config', (req, res) => res.json({ app: 'EcoSync', version: '2.0.0', db: dbMode, ai: aiEnabled() ? 'gemini' : 'device', model: aiEnabled() ? MODELS.text : 'MobileNet (on-device)', prices: PRICES, mapStyle: process.env.MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty' }));
+app.get('/api/config', (req, res) => res.json({ app: 'EcoSync', version: '2.1.0', db: dbMode, ai: aiEnabled() ? 'gemini' : 'device', model: aiEnabled() ? MODELS.text : 'MobileNet (on-device)', prices: PRICES, mapsKey: process.env.GOOGLE_MAPS_API_KEY || null, mapStyle: process.env.MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty' }));
+// Live check of every service (no secrets in the output). Cached for 5 minutes.
+let statusCache = null;
+app.get('/api/status', wrap(async (req, res) => {
+  if (statusCache && Date.now() - statusCache.at < 5 * 60_000 && !req.query.fresh) return res.json(statusCache.data);
+  const out = { database: { mode: dbMode, ok: false }, gemini: { configured: aiEnabled(), ok: null, model: aiEnabled() ? MODELS.text : null }, places: { configured: !!process.env.GOOGLE_MAPS_API_KEY, ok: null } };
+  try { await q('SELECT 1'); out.database.ok = true; } catch (e) { out.database.error = e.message; }
+  if (aiEnabled()) {
+    try { const t = await gemini({ prompt: 'Reply with the single word: ready' }); out.gemini.ok = /ready/i.test(t); out.gemini.reply = t.slice(0, 40); }
+    catch (e) { out.gemini.ok = false; out.gemini.error = e.message.slice(0, 200); }
+  }
+  if (process.env.GOOGLE_MAPS_API_KEY) { const r = await googleHubs(28.6139, 77.209, 5000).catch(() => []); out.places.ok = placesStatus.ok ?? r.length > 0; out.places.results = r.length; if (placesStatus.error) out.places.error = placesStatus.error.slice(0, 200); }
+  statusCache = { at: Date.now(), data: out };
+  res.json(out);
+}));
 app.get('/healthz', wrap(async (req, res) => { await q('SELECT 1'); res.json({ ok: true, db: dbMode }); }));
 
 // ---------- accounts (email + password, stored hashed in Postgres) ----------

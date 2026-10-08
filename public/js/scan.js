@@ -30,8 +30,8 @@ export async function render(host) {
     out.innerHTML = `<div class="card stack"><div class="row"><span class="spinner"></span><b>Looking closely…</b></div><p class="muted" style="font-size:12.5px">Identifying the material and checking for hazards.</p></div>`;
     try {
       let r;
-      if (server) r = await post('/api/ai/scan', { image: dataUrl, mime: 'image/jpeg' });
-      else {
+      if (server) r = await post('/api/ai/scan', { image: dataUrl, mime: 'image/jpeg' }).catch(() => null);
+      if (!r) {
         const img = new Image(); img.src = dataUrl; await img.decode();
         const c = await classify(img);
         r = { item: c.material ? c.item : c.label, material: c.material, label: c.label, confidence: c.confidence, guesses: c.preds?.slice(0, 3).map((p) => p.className.split(',')[0]) };

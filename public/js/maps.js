@@ -4,6 +4,7 @@ import { $, $$, esc, toast, sheet, setBusy, loadScript, loadCss, ago, fileToData
 import { icon } from './icons.js';
 import { requireAuth } from './app.js';
 import { tiles } from './views.js';
+import { hasGoogle, loadGoogle, mapStyles, pinIcon, dotIcon, lookAround } from './gmaps.js';
 
 const KIND = { centre: ['#7fe3b4', 'recycle', 'Recycling centre'], transfer: ['#93c5fd', 'truck', 'Transfer station'], scrap: ['#e3b86c', 'market', 'Scrap yard'], container: ['#d1fae5', 'recycle', 'Drop-off point'], landfill: ['#ff8a7a', 'alert', 'Landfill'] };
 const streetView = (lat, lng) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
@@ -18,6 +19,7 @@ export async function render(host, params) {
 }
 
 async function render2d(box) {
+  if (hasGoogle()) { try { return await render2dGoogle(box); } catch (e) { toast(e.message, 'err'); } }
   let filter = 'all', radius = 8000, hubs = [], markers = [], lots;
   box.innerHTML = `<div class="toolbar"><div class="chips">${[['all', 'All'], ['official', 'Official'], ['ewaste', 'E-waste'], ['scrap', 'Scrap yards'], ['container', 'Drop-off']].map(([k, l]) => `<button class="chip" data-f="${k}" aria-pressed="${k === filter}">${l}</button>`).join('')}</div>
     <select class="input" id="hr" style="width:auto;min-height:32px;padding:4px 10px;font-size:12.5px" aria-label="Distance"><option value="3000">3 km</option><option value="8000" selected>8 km</option><option value="15000">15 km</option></select>
@@ -114,8 +116,9 @@ async function render3d(box) {
     const f = map.queryRenderedFeatures(e.point, { layers: ['reports-3d'] })[0]; if (!f) return;
     const r = reports.find((x) => x.id === f.properties.id); if (!r) return;
     const pop = new ml.Popup({ offset: 12, maxWidth: '280px' }).setLngLat([r.lng, r.lat]).setHTML(`<b style="text-transform:capitalize">${esc(r.type.replace('_', '-'))}</b><div class="muted" style="font-size:12px">${['', 'Low', 'Medium', 'High'][r.severity]} · ${r.confirms} ${r.confirms === 1 ? 'report' : 'confirmations'} · ${ago(r.at)}</div>${r.note ? `<p style="margin-top:6px;font-size:12.5px">${esc(r.note)}</p>` : ''}
-      <div class="row" style="gap:6px;margin-top:10px">${r.status === 'cleaned' ? '<span class="tag ok">Cleaned</span>' : '<button class="btn btn-sm" data-rc="confirm">Confirm +2</button><button class="btn btn-sm btn-primary" data-rc="clean">I cleaned it +40</button>'}<a class="btn btn-sm" target="_blank" rel="noopener" href="${streetView(r.lat, r.lng)}">Look around</a></div>`).addTo(map);
+      <div class="row" style="gap:6px;margin-top:10px">${r.status === 'cleaned' ? '<span class="tag ok">Cleaned</span>' : '<button class="btn btn-sm" data-rc="confirm">Confirm +2</button><button class="btn btn-sm btn-primary" data-rc="clean">I cleaned it +40</button>'}<button class="btn btn-sm" data-look>Look around</button></div>`).addTo(map);
     pop.getElement().addEventListener('click', async (ev) => {
+      if (ev.target.closest('[data-look]')) return lookAround(r.lat, r.lng, `${r.type} waste report`);
       const b = ev.target.closest('[data-rc]'); if (!b || !requireAuth()) return; setBusy(b, true);
       try { const { report: nr } = await post(`/api/reports/${r.id}/${b.dataset.rc}`); Object.assign(r, nr); map.getSource('reports').setData(geo()); pop.remove(); toast(b.dataset.rc === 'clean' ? 'Thank you. +40 EcoCoins' : 'Confirmed. +2 EcoCoins'); coins(); }
       catch (er) { setBusy(b, false); toast(er.message, 'err'); }
@@ -124,7 +127,7 @@ async function render3d(box) {
   const spin = () => { map.setBearing((map.getBearing() + 0.12) % 360); raf = requestAnimationFrame(spin); };
   $('#o-orbit').onclick = (e) => { orbit = !orbit; e.currentTarget.classList.toggle('btn-primary', orbit); e.currentTarget.classList.toggle('glass', !orbit); orbit ? spin() : cancelAnimationFrame(raf); };
   $('#o-report').onclick = () => { if (!requireAuth()) return; reporting = true; $('#m3').classList.add('reporting'); note('Tap the exact spot where the garbage is.'); };
-  $('#o-look').onclick = () => { const c = map.getCenter(); window.open(streetView(c.lat, c.lng), '_blank', 'noopener'); };
+  $('#o-look').onclick = () => { const c = map.getCenter(); lookAround(c.lat, c.lng, 'Map centre'); };
   $('#o-me').onclick = async () => { const l = await locate(true); map.flyTo({ center: [l.lng, l.lat], zoom: 16.4, pitch: 62 }); };
   function report(ll) {
     let sev = 2, type = 'plastic', photo = null;
@@ -148,4 +151,51 @@ async function render3d(box) {
     });
   }
   return () => { cancelAnimationFrame(raf); map.remove(); };
+}
+
+// ---------- 2D hubs on Google Maps (when a Maps key is configured) ----------
+async function render2dGoogle(box) {
+  let filter = 'all', radius = 8000, hubs = [], markers = [], lots = [];
+  box.innerHTML = `<div class="toolbar"><div class="chips">${[['all', 'All'], ['official', 'Official'], ['ewaste', 'E-waste'], ['scrap', 'Scrap dealers'], ['container', 'Drop-off']].map(([k, l]) => `<button class="chip" data-f="${k}" aria-pressed="${k === filter}">${l}</button>`).join('')}</div>
+    <select class="input" id="hr" style="width:auto;min-height:32px;padding:4px 10px;font-size:12.5px" aria-label="Distance"><option value="3000">3 km</option><option value="8000" selected>8 km</option><option value="15000">15 km</option></select>
+    <button class="btn btn-sm" id="hme">${icon('navigate')}My location</button></div>
+    <div class="map-wrap"><div class="map" id="m2"><div style="position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:12.5px"><span class="row"><span class="spinner"></span>Loading Google Maps…</span></div></div><div class="map-side" id="hlist"><p class="muted">Finding places…</p></div></div>`;
+  const g = await loadGoogle();
+  const map = new g.Map($('#m2'), { center: { lat: S.loc.lat, lng: S.loc.lng }, zoom: 14, styles: mapStyles(), disableDefaultUI: true, zoomControl: true, fullscreenControl: true, streetViewControl: true, gestureHandling: 'greedy', clickableIcons: false });
+  const info = new g.InfoWindow();
+  const me = new g.Marker({ map, position: { lat: S.loc.lat, lng: S.loc.lng }, icon: dotIcon('#ffffff', 8), zIndex: 999, title: 'You' });
+  const visible = () => hubs.filter((h) => filter === 'all' || (filter === 'official' && h.official) || (filter === 'ewaste' && (h.accepts.some((a) => /electr|batter|mobile|computer|e_waste|appliance/.test(a)) || /e-waste/i.test(h.kindLabel))) || (filter === 'scrap' && h.kind === 'scrap') || (filter === 'container' && h.kind === 'container'));
+  const card = (h) => `<div style="color:#111;font:13px Manrope,system-ui,sans-serif;max-width:240px"><b>${esc(h.name)}</b><div style="color:#666;font-size:12px">${esc(h.kindLabel)} · ${h.distanceKm} km${h.rating ? ` · ★ ${h.rating} (${h.ratings})` : ''}</div>${h.address ? `<div style="font-size:12px;margin-top:4px">${esc(h.address)}</div>` : ''}${h.openNow != null ? `<div style="font-size:12px;margin-top:2px;color:${h.openNow ? '#1f7a52' : '#a33'}">${h.openNow ? 'Open now' : 'Closed now'}</div>` : ''}
+    <div style="display:flex;gap:6px;margin-top:10px"><a target="_blank" rel="noopener" href="${directions(h.lat, h.lng)}" style="background:#0a0a0a;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px">Directions</a><button data-look="${h.id}" style="border:1px solid #ccc;background:#fff;padding:6px 10px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer">Look around</button></div></div>`;
+  const draw = (unavailable) => {
+    markers.forEach((m) => m.setMap(null)); markers = [];
+    const list = visible();
+    list.forEach((h) => { const m = new g.Marker({ map, position: { lat: h.lat, lng: h.lng }, icon: pinIcon((KIND[h.kind] || KIND.container)[0]), title: h.name }); m._id = h.id; m.addListener('click', () => { info.setContent(card(h)); info.open({ map, anchor: m }); }); markers.push(m); });
+    $('#hlist').innerHTML = unavailable && !list.length ? `<div class="empty"><span class="serif">The map services are busy.</span><span>Try again in a moment.</span><button class="btn btn-sm" data-retry>Try again</button></div>`
+      : (list.length ? `<p class="faint" style="font-size:11.5px">${list.length} places · Google Maps &amp; OpenStreetMap</p>` + list.map((h) => `<button class="hub" data-hub="${h.id}"><span class="row" style="justify-content:space-between;flex-wrap:nowrap"><span class="n">${esc(h.name)}</span><span class="num muted" style="font-size:12px;white-space:nowrap">${h.distanceKm} km</span></span>
+        <span class="row" style="gap:6px"><span class="tag">${esc(h.kindLabel)}</span>${h.official ? '<span class="tag ok">Official</span>' : ''}${h.rating ? `<span class="tag">★ ${h.rating}</span>` : ''}${h.openNow ? '<span class="tag ok">Open now</span>' : ''}</span>${h.address ? `<span class="faint" style="font-size:11.5px">${esc(h.address)}</span>` : ''}</button>`).join('')
+        : `<div class="empty"><span>No places match within ${radius / 1000} km. Widen the distance or choose "All".</span></div>`);
+  };
+  const load = async () => {
+    $('#hlist').innerHTML = '<p class="muted">Finding places…</p>';
+    try { const r = await get(`/api/hubs?lat=${S.loc.lat}&lng=${S.loc.lng}&r=${radius}`); hubs = r.hubs; draw(r.unavailable);
+      if (hubs.length) { const b = new g.LatLngBounds(); b.extend({ lat: S.loc.lat, lng: S.loc.lng }); visible().slice(0, 15).forEach((h) => b.extend({ lat: h.lat, lng: h.lng })); map.fitBounds(b, 60); } }
+    catch (e) { $('#hlist').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const loadLots = async () => {
+    lots.forEach((m) => m.setMap(null));
+    const { listings } = await get(`/api/listings?lat=${S.loc.lat}&lng=${S.loc.lng}`).catch(() => ({ listings: [] }));
+    lots = listings.map((l) => { const m = new g.Marker({ map, position: { lat: l.lat, lng: l.lng }, icon: dotIcon(matColor(l.material), 7), title: l.title }); m.addListener('click', () => { info.setContent(`<div style="color:#111;font:13px Manrope,sans-serif"><b>${esc(l.title)}</b><div style="color:#666;font-size:12px">${l.kg} kg · ₹${l.price}</div><a href="#/market" style="display:inline-block;margin-top:8px;background:#0a0a0a;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px">Open in market</a></div>`); info.open({ map, anchor: m }); }); return m; });
+  };
+  const onLook = (e) => { const b = e.target.closest('[data-look]'); if (!b) return; const h = hubs.find((x) => x.id === b.dataset.look); if (h) lookAround(h.lat, h.lng, h.name); };
+  document.addEventListener('click', onLook);
+  box.addEventListener('click', (e) => {
+    const f = e.target.closest('[data-f]'); if (f) { filter = f.dataset.f; $$('[data-f]', box).forEach((b) => b.setAttribute('aria-pressed', String(b === f))); draw(); return; }
+    if (e.target.closest('[data-retry]')) return load();
+    const h = e.target.closest('[data-hub]'); if (h) { const m = markers.find((x) => x._id === h.dataset.hub); if (m) { map.panTo(m.getPosition()); map.setZoom(16); g.event.trigger(m, 'click'); } }
+  });
+  $('#hr').onchange = (e) => { radius = +e.target.value; load(); };
+  $('#hme').onclick = async () => { const l = await locate(true); if (l.approx) toast('Allow location access to use your exact position.', 'err'); me.setPosition({ lat: l.lat, lng: l.lng }); map.setCenter({ lat: l.lat, lng: l.lng }); load(); loadLots(); };
+  locate().then((l) => { me.setPosition({ lat: l.lat, lng: l.lng }); map.setCenter({ lat: l.lat, lng: l.lng }); load(); loadLots(); });
+  return () => document.removeEventListener('click', onLook);
 }
