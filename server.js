@@ -359,4 +359,8 @@ app.get('/download/android', (req, res) => {
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(pub, 'index.html')));
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Something went wrong on our side. Try again.' }); });
 
-app.listen(PORT, () => console.log(`EcoSync on http://localhost:${PORT} · database: ${dbMode} · AI: ${aiEnabled() ? 'gemini' : 'on-device'}`));
+app.listen(PORT, () => {
+  console.log(`EcoSync on http://localhost:${PORT} · database: ${dbMode} · AI: ${aiEnabled() ? 'gemini' : 'on-device'}`);
+  // Startup self-check: logs whether the database, Gemini and Places respond (no secrets printed).
+  setTimeout(() => fetch(`http://localhost:${PORT}/api/status?fresh=1`).then((r) => r.json()).then((j) => console.log('Self-check', JSON.stringify(j))).catch((e) => console.log('Self-check failed', e.message)), 1500);
+});
