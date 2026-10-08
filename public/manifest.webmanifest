@@ -1,0 +1,22 @@
+{
+  "name": "EcoSync — Scan, sell, recycle",
+  "short_name": "EcoSync",
+  "description": "AI scrap scanner, recycling marketplace, pickups, EcoCoins and QR material passports.",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1f1d",
+  "theme_color": "#0f1f1d",
+  "orientation": "portrait",
+  "categories": ["lifestyle", "utilities", "education"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "AI scanner", "url": "./#/scan" },
+    { "name": "Marketplace", "url": "./#/market" },
+    { "name": "Book pickup", "url": "./#/pickups" }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "EcoSync",
+  "description": "AI waste scanner, recycling marketplace with escrow payments, pickup scheduling, EcoCoins rewards, QR material passports, recycling-hub maps and a 3D litter map.",
+  "requestFramePermissions": ["camera", "geolocation", "microphone"]
+}

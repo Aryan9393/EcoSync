@@ -1,0 +1,46 @@
+# Builds the EcoSync Android APK on every push that touches android/ (or on demand),
+# signs it with the Android SDK's apksigner, and publishes it as a GitHub Release asset.
+# Set a repository variable APP_URL (Settings → Secrets and variables → Actions → Variables)
+# to your Render address, e.g. https://ecosync.onrender.com
+name: Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Fetch apktool
+        run: curl -fsSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.4.1/apktool_2.4.1.jar
+      - name: Add Android build-tools to PATH
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "$BT" >> "$GITHUB_PATH"
+      - name: Restore signing key
+        if: env.KEYSTORE_BASE64 != ''
+        run: echo "$KEYSTORE_BASE64" | base64 -d > android/ecosync.keystore
+      - name: Build and sign
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://ecosync.onrender.com' }}
+          APKTOOL: ${{ github.workspace }}/apktool.jar
+          KS_PASS: ${{ secrets.KS_PASS || 'ecosync123' }}
+          OUT: ${{ github.workspace }}/EcoSync.apk
+        run: ./android/build.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: EcoSync-apk, path: EcoSync.apk }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: EcoSync Android (latest)
+          body: Download EcoSync.apk below and open it on your Android phone. Allow "Install unknown apps" when asked.
+          files: EcoSync.apk
+          make_latest: true

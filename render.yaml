@@ -1,0 +1,42 @@
+# Render Blueprint: New → Blueprint → pick this repo. Render reads this file and creates the service.
+services:
+  - type: web
+    name: ecosync
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SESSION_SECRET
+        generateValue: true
+      # --- AI (Gemini). Get a key at https://aistudio.google.com/apikey
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-nano-banana-2.1
+      # --- Payments (Razorpay test keys work: Dashboard → Settings → API Keys)
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      # --- Sign-in. Option A: email codes via Resend (https://resend.com)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: EcoSync <onboarding@resend.dev>
+      # --- Sign-in. Option B: Firebase Auth (Google + email/password + email link)
+      - key: FIREBASE_API_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: FIREBASE_APP_ID
+        sync: false
