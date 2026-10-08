@@ -1,7 +1,7 @@
 # Builds the EcoSync Android APK on every push that touches android/ (or on demand),
 # signs it with the Android SDK's apksigner, and publishes it as a GitHub Release asset.
 # Set a repository variable APP_URL (Settings → Secrets and variables → Actions → Variables)
-# to your Render address, e.g. https://ecosync.onrender.com
+# to your Render address, e.g. https://ecosync-29iu.onrender.com
 name: Android APK
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
         run: echo "$KEYSTORE_BASE64" | base64 -d > android/ecosync.keystore
       - name: Build and sign
         env:
-          APP_URL: ${{ vars.APP_URL || 'https://ecosync.onrender.com' }}
+          APP_URL: ${{ vars.APP_URL || 'https://ecosync-29iu.onrender.com' }}
           APKTOOL: ${{ github.workspace }}/apktool.jar
           KS_PASS: ${{ secrets.KS_PASS || 'ecosync123' }}
           OUT: ${{ github.workspace }}/EcoSync.apk

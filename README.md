@@ -34,7 +34,7 @@ Copy `.env.example` to `.env` and fill in whichever keys you have.
    - `GEMINI_API_KEY` — from https://aistudio.google.com/apikey
    - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — Razorpay Dashboard → Settings → API keys (test keys are fine)
    - `RESEND_API_KEY` — for real sign-in emails, **or** the four `FIREBASE_*` values for Firebase Auth
-4. Deploy. Your site is at `https://ecosync.onrender.com` (or the name Render gives you).
+4. Deploy. Your site is at `https://ecosync-29iu.onrender.com` (or the name Render gives you).
 
 > Free Render instances sleep after 15 minutes idle; the first visit then takes ~30 s. Open the site a minute before your audition. Data is stored in a JSON file; attach a Render Disk at `/var/data` to keep it across deploys.
 
@@ -47,7 +47,7 @@ git push -u origin main
 ## Android app (APK)
 
 - A ready APK is included at `public/downloads/EcoSync.apk` and is served from `/download/android` on your site.
-- It opens straight to the AI scanner, with camera, GPS and photo uploads enabled. On first launch it connects to `https://ecosync.onrender.com`; if your Render URL is different, it asks you for the address once.
+- It opens straight to the AI scanner, with camera, GPS and photo uploads enabled. On first launch it connects to `https://ecosync-29iu.onrender.com`; if your Render URL is different, it asks you for the address once.
 - **Rebuild with your URL:** in GitHub → Settings → Secrets and variables → Actions → **Variables**, add `APP_URL` = your Render URL, then run the **Android APK** workflow (Actions tab). The signed APK appears under **Releases → android-latest**. To keep the same signing key between builds, add a base64 keystore as the `KEYSTORE_BASE64` secret (and `KS_PASS`).
 - Install: open the APK on the phone and allow "Install unknown apps".
 
