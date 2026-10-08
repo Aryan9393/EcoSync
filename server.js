@@ -87,7 +87,7 @@ app.get('/api/status', wrap(async (req, res) => {
   if (statusCache && Date.now() - statusCache.at < 5 * 60_000 && !req.query.fresh) return res.json(statusCache.data);
   const out = { database: { mode: dbMode, ok: false }, gemini: { configured: aiEnabled(), ok: null, model: aiEnabled() ? MODELS.text : null }, places: { configured: !!process.env.GOOGLE_MAPS_API_KEY, ok: null } };
   try { await q('SELECT 1'); out.database.ok = true; } catch (e) { out.database.error = e.message; }
-  if (aiEnabled()) {
+  if (aiEnabled() && req.query.deep) {
     try { const t = await gemini({ prompt: 'Reply with the single word: ready' }); out.gemini.ok = /ready/i.test(t); out.gemini.reply = t.slice(0, 40); }
     catch (e) { out.gemini.ok = false; out.gemini.error = e.message.slice(0, 200); }
     try { const t = await gemini({ system: ECOBOT_SYSTEM, history: [{ role: 'model', text: 'Namaste! Ask me anything.' }, { role: 'user', text: 'Akhbaar ka rate kya hai?' }] }); out.gemini.chat = { ok: true, reply: t.slice(0, 80) }; }
@@ -95,7 +95,7 @@ app.get('/api/status', wrap(async (req, res) => {
     try { const r = await gemini({ prompt: SCAN_PROMPT, image: TEST_IMAGE, mime: 'image/jpeg', json: true }); out.gemini.scan = { ok: !!r.item, item: r.item, material: materialKey(r.material) }; }
     catch (e) { out.gemini.scan = { ok: false, error: e.message.slice(0, 200) }; }
   }
-  if (process.env.GOOGLE_MAPS_API_KEY) { const r = await googleHubs(28.6139, 77.209, 5000).catch(() => []); out.places.ok = placesStatus.ok ?? r.length > 0; out.places.results = r.length; if (placesStatus.error) out.places.error = placesStatus.error.slice(0, 200); }
+  if (process.env.GOOGLE_MAPS_API_KEY && req.query.deep) { const r = await googleHubs(28.6139, 77.209, 5000).catch(() => []); out.places.ok = placesStatus.ok ?? r.length > 0; out.places.results = r.length; if (placesStatus.error) out.places.error = placesStatus.error.slice(0, 200); }
   statusCache = { at: Date.now(), data: out };
   res.json(out);
 }));
@@ -367,6 +367,6 @@ app.use((err, req, res, next) => { console.error(err); res.status(500).json({ er
 
 app.listen(PORT, () => {
   console.log(`EcoSync on http://localhost:${PORT} · database: ${dbMode} · AI: ${aiEnabled() ? 'gemini' : 'on-device'}`);
-  // Startup self-check: logs whether the database, Gemini and Places respond (no secrets printed).
+  // Startup self-check of the database. Gemini and Places are only tested via /api/status?deep=1 so deploys don't use up API quota.
   setTimeout(() => fetch(`http://localhost:${PORT}/api/status?fresh=1`).then((r) => r.json()).then((j) => console.log('Self-check', JSON.stringify(j))).catch((e) => console.log('Self-check failed', e.message)), 1500);
 });
