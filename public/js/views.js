@@ -4,6 +4,7 @@ import { $, $$, esc, inr, kg, ago, when, dayLabel, toast, sheet, setBusy, fileTo
 import { icon } from './icons.js';
 import { requireAuth, renderShell, route, applyTheme } from './app.js';
 import { openCheckout } from './pay.js';
+import { openTracker, startSharing, stopSharing, sharingId, currentPosition, statusLine, clock } from './tracking.js';
 
 const greet = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; };
 const dot = (m) => `<i class="dot" style="background:${matColor(m)}"></i>`;
@@ -28,7 +29,7 @@ export async function dashboard(host) {
     </div>
     <div class="actions" style="margin-bottom:12px">${(buyer ? [
       ['#/market', 'market', 'Browse lots', 'Nearest first'], ['#/passport/scan', 'qr', 'Scan a seller\'s QR', 'Complete a pickup'],
-      ['#/map', 'pin', 'Recycling hubs', 'Where to drop off'], ['#/map/3d', 'cube', 'Litter map', 'Clean a spot, +40'],
+      ['#/pickups', 'truck', 'Pickup requests', 'Accept and go live'], ['#/map', 'pin', 'Recycling hubs', 'Where to drop off'],
     ] : [
       ['#/scan', 'scan', 'Scan an item', 'Material and price'], ['#/market/new', 'plus', 'List scrap', 'Reach collectors nearby'],
       ['#/pickups', 'truck', 'Book a pickup', 'Leaf slots earn +25'], ['#/map/3d', 'flag', 'Report litter', 'Pin it in 3D, +15'],
@@ -50,7 +51,7 @@ export async function dashboard(host) {
     $('#d-pass').innerHTML = passports.length ? passports.slice(0, 4).map(passRow).join('') : empty(buyer ? 'Reserve a lot and its passport starts here.' : 'When a collector reserves your scrap, its passport starts here.', buyer ? ['#/market', 'Open the market'] : ['#/market/new', 'List scrap']);
   }).catch(() => {});
   if (buyer) get(`/api/listings?lat=${loc.lat}&lng=${loc.lng}`).then(({ listings }) => { $('#d-two').innerHTML = listings.length ? listings.slice(0, 4).map(listRow).join('') : empty('No open lots near you yet. They appear here the moment someone lists.'); }).catch(() => {});
-  else get('/api/pickups/mine').then(({ pickups }) => { const up = pickups.filter((p) => p.status === 'scheduled'); $('#d-two').innerHTML = up.length ? up.slice(0, 3).map(pickRow).join('') : empty('Nothing booked. A leaf on a slot means a van is already nearby.', ['#/pickups', 'Book a pickup']); }).catch(() => {});
+  else get('/api/pickups/mine').then(({ pickups }) => { const up = pickups.filter((p) => ['scheduled', 'accepted', 'on_the_way', 'arrived'].includes(p.status)); $('#d-two').innerHTML = up.length ? up.slice(0, 3).map(pickRow).join('') : empty('Nothing booked. A leaf on a slot means another pickup is already booked nearby.', ['#/pickups', 'Book a pickup']); }).catch(() => {});
   hubsInto($('#d-hubs'), loc, 4);
 }
 export function hubsInto(box, loc, n) {
@@ -63,7 +64,7 @@ const empty = (text, link) => `<div class="empty"><span>${text}</span>${link ? `
 export const passRow = (p) => `<a class="li" href="#/passport/${p.id}"><span class="ico">${icon('qr')}</span><span style="min-width:0"><div class="t">${esc(p.title)}</div><div class="s mono">${p.id}</div></span>${statusTag(p.status)}</a>`;
 export const statusTag = (s) => ({ awaiting_pickup: '<span class="tag warn">Awaiting pickup</span>', collected: '<span class="tag ok">Collected</span>', reborn: '<span class="tag grad">Reborn</span>' }[s] || `<span class="tag">${esc(s)}</span>`);
 const listRow = (l) => `<a class="li" href="#/market"><span class="ico">${dot(l.material)}</span><span style="min-width:0"><div class="t">${esc(l.title)}</div><div class="s">${kg(l.kg)} · ${l.distanceKm ?? '–'} km</div></span><span class="price" style="font-size:18px">${inr(l.price)}</span></a>`;
-const pickRow = (p) => `<div class="li"><span class="ico">${icon('truck')}</span><span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot}</div><div class="s">Code <b class="mono">${p.code}</b>${p.greenRoute ? ' · Green Route' : ''}</div></span><a class="btn btn-sm" href="#/pickups">Track</a></div>`;
+const pickRow = (p) => `<div class="li"><span class="ico">${icon('truck')}</span><span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot}</div><div class="s">${statusLine(p).text}</div></span><a class="btn btn-sm" href="#/pickups">${['on_the_way', 'arrived'].includes(p.status) ? 'Track live' : 'View'}</a></div>`;
 
 // =============== Market ===============
 export async function market(host, params) {
@@ -174,10 +175,11 @@ function voiceFill(btn, el, after) {
 
 // =============== Pickups ===============
 export async function pickups(host) {
+  if (S.user?.role === 'buyer') return collectorPickups(host);
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i + 1); return d; });
   const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   let date = iso(days[0]), slot = null; const mats = new Set(['paper']);
-  host.innerHTML = `${head('Pickups', 'At your door.', 'Choose a day and a slot. A leaf means another pickup is already booked close by, so the trip is shared and you earn 25 extra coins.')}
+  host.innerHTML = `${head('Pickups', 'At your door.', 'Book a day and a slot. A collector near you accepts it, and when they set off you can follow them live. A leaf means another pickup is already booked close by, so you earn 25 extra coins.')}
     <div class="grid-2">
       <form class="card stack" id="pk" novalidate>
         <h2>Book a pickup</h2>
@@ -186,11 +188,12 @@ export async function pickups(host) {
         <div class="field"><span>What's going</span><div class="chips">${['paper', 'cardboard', 'pet', 'hdpe', 'aluminium', 'steel', 'glass', 'e_waste', 'textile'].map((m) => `<button type="button" class="chip" data-pm="${m}" aria-pressed="${mats.has(m)}">${dot(m)}${esc(matLabel(m).replace(/ \(\d\)/, ''))}</button>`).join('')}</div></div>
         <div class="split"><label class="field"><span>About how many kg?</span><input class="input" id="pk-kg" type="number" min="1" value="5"></label>
           <label class="field"><span>Address</span><input class="input" id="pk-addr" placeholder="House 14, Block C" autocomplete="street-address"></label></div>
+        <p class="faint" style="font-size:11.5px;margin-top:-4px">Your exact location is shared only with the collector who accepts.</p>
         <button class="btn btn-primary btn-lg" type="submit" id="pk-go">Book pickup ${icon('arrowUR')}</button>
       </form>
       <section class="card"><div class="card-head"><h2>Your pickups</h2></div><div id="pk-list" class="list"><p class="muted">${S.user ? 'Loading…' : 'Sign in to see your pickups.'}</p></div></section>
     </div>`;
-  let list = [];
+  let list = [], poll;
   const loadSlots = async () => {
     const loc = S.loc;
     const { slots } = await get(`/api/pickups/slots?date=${date}&lat=${loc.lat}&lng=${loc.lng}`);
@@ -200,9 +203,10 @@ export async function pickups(host) {
   const loadList = async () => {
     if (!S.user) return;
     list = (await get('/api/pickups/mine')).pickups;
-    $('#pk-list').innerHTML = list.length ? list.map((p) => `<div class="li"><span class="ico">${icon(p.status === 'completed' ? 'check' : 'truck')}</span>
-      <span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot}</div><div class="s">${esc(p.address || 'Your location')} · code <b class="mono">${p.code}</b>${p.greenRoute ? ' · <span style="color:var(--ok)">Green Route</span>' : ''}</div></span>
-      <span class="row" style="gap:6px">${p.status === 'scheduled' ? `<button class="btn btn-sm" data-track="${p.id}">Track</button><button class="icon-btn" data-cancel="${p.id}" aria-label="Cancel pickup">${icon('x')}</button>` : `<span class="tag ${p.status === 'completed' ? 'ok' : ''}">${p.status === 'completed' ? 'Done' : 'Cancelled'}</span>`}</span></div>`).join('')
+    $('#pk-list').innerHTML = list.length ? list.map((p) => { const st = statusLine(p); const live = ['on_the_way', 'arrived'].includes(p.status);
+      return `<div class="li"><span class="ico">${icon(p.status === 'completed' ? 'check' : 'truck')}</span>
+      <span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot}</div><div class="s">Code <b class="mono">${p.code}</b>${p.greenRoute ? ' · <span style="color:var(--ok)">Green Route</span>' : ''}</div><div class="s" style="color:${st.tag === 'ok' ? 'var(--ok)' : st.tag === 'warn' ? 'var(--warn)' : st.tag === 'bad' ? 'var(--bad)' : 'var(--muted)'}">${st.text}</div></span>
+      <span class="row" style="gap:6px">${live ? `<button class="btn btn-sm btn-primary" data-track="${p.id}">${icon('navigate')}Track live</button>` : ['scheduled', 'accepted'].includes(p.status) ? `<button class="btn btn-sm" data-track="${p.id}">Status</button>` : ''}${['scheduled', 'accepted', 'on_the_way'].includes(p.status) ? `<button class="icon-btn" data-cancel="${p.id}" aria-label="Cancel pickup">${icon('x')}</button>` : ''}</span></div>`; }).join('')
       : empty('No pickups yet. Your first booking earns 10 coins, or 35 on a Green Route.');
   };
   host.addEventListener('click', async (e) => {
@@ -210,7 +214,7 @@ export async function pickups(host) {
     if (t.dataset.date) { date = t.dataset.date; $$('[data-date]', host).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.date === date))); loadSlots(); }
     else if (t.dataset.slot) { slot = t.dataset.slot; $$('[data-slot]', host).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.slot === slot))); }
     else if (t.dataset.pm) { mats.has(t.dataset.pm) ? mats.delete(t.dataset.pm) : mats.add(t.dataset.pm); t.setAttribute('aria-pressed', String(mats.has(t.dataset.pm))); }
-    else if (t.dataset.track) track(list.find((p) => p.id === t.dataset.track), loadList);
+    else if (t.dataset.track) openTracker(t.dataset.track, () => loadList());
     else if (t.dataset.cancel) { try { await patch(`/api/pickups/${t.dataset.cancel}`, { status: 'cancelled' }); toast('Pickup cancelled'); loadList(); } catch (er) { toast(er.message, 'err'); } }
   });
   $('#pk').onsubmit = async (e) => {
@@ -218,34 +222,80 @@ export async function pickups(host) {
     const btn = $('#pk-go'); setBusy(btn, true, 'Booking');
     try {
       const loc = await locate(true);
+      if (loc.approx) throw new Error('Allow location access so the collector can find your door.');
       const { pickup } = await post('/api/pickups', { date, slot, lat: loc.lat, lng: loc.lng, address: $('#pk-addr').value, materials: [...mats], estKg: +$('#pk-kg').value });
       toast(pickup.greenRoute ? 'Booked on a Green Route. +35 EcoCoins' : 'Pickup booked. +10 EcoCoins');
-      sheet({ title: 'You\'re booked.', body: `<div class="stack" style="justify-items:start"><p class="muted">${dayLabel(pickup.date)}, ${pickup.slot}</p><div><div class="muted" style="font-size:12px;margin-bottom:6px">Pickup code · tell this to the collector</div><div class="code-big">${pickup.code}</div></div><button class="btn btn-primary" data-close>Done</button></div>` });
+      sheet({ title: 'You\'re booked.', body: `<div class="stack" style="justify-items:start"><p class="muted">${dayLabel(pickup.date)}, ${pickup.slot}</p><div><div class="muted" style="font-size:12px;margin-bottom:6px">Pickup code · give this to the collector at your door</div><div class="code-big">${pickup.code}</div></div><p class="muted" style="font-size:12.5px">Collectors near you can see the request now. When one sets off, you'll see where they are and exactly when they'll arrive.</p><button class="btn btn-primary" data-close>Done</button></div>` });
       loadList(); refreshMe().then(coinsChanged);
     } catch (er) { toast(er.message, 'err'); } finally { setBusy(btn, false); }
   };
   await Promise.all([loadSlots(), loadList()]);
+  poll = setInterval(() => { if (!document.hidden && !$('.scrim')) loadList().catch(() => {}); }, 20_000);
+  return () => clearInterval(poll);
 }
-function track(p, after) {
-  let timer, map;
-  sheet({
-    title: 'On its way.', sub: `${dayLabel(p.date)} · ${p.slot} · code <b class="mono">${p.code}</b>`, wide: true,
-    body: `<div class="map" id="trk" style="height:320px"></div><div class="row" style="justify-content:space-between"><div><div class="muted" style="font-size:12px">Collector route preview</div><div class="price" id="trk-eta">—</div></div><button class="btn btn-primary" id="trk-done">${icon('check')}Mark as collected</button></div><p class="faint" style="font-size:11.5px">The van's live position appears here once collectors share location from their app. For now this shows the route to your door.</p>`,
-    onMount(el, close) {
-      const L = window.L, me = [p.lat || S.loc.lat, p.lng || S.loc.lng];
-      map = L.map($('#trk', el), { zoomControl: false }).setView(me, 15); tiles(map);
-      L.marker(me, { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16] }) }).addTo(map);
-      const path = [[me[0] + 0.012, me[1] - 0.014], [me[0] + 0.012, me[1] - 0.004], [me[0] + 0.004, me[1] - 0.004], [me[0] + 0.004, me[1]], me];
-      L.polyline(path, { color: getComputedStyle(document.documentElement).getPropertyValue('--fg').trim(), weight: 3, opacity: 0.7, dashArray: '2 8', lineCap: 'round' }).addTo(map);
-      const truck = L.marker(path[0], { icon: L.divIcon({ className: '', html: `<div class="truck">${icon('truck')}</div>`, iconSize: [32, 32], iconAnchor: [16, 16] }) }).addTo(map);
-      map.fitBounds(path, { padding: [30, 30] });
-      let k = 0; const N = 220;
-      const at = (f) => { const tot = path.length - 1, x = f * tot, i = Math.min(tot - 1, Math.floor(x)), r = x - i; return [path[i][0] + (path[i + 1][0] - path[i][0]) * r, path[i][1] + (path[i + 1][1] - path[i][1]) * r]; };
-      timer = setInterval(() => { k = Math.min(N, k + 1); truck.setLatLng(at(k / N)); $('#trk-eta', el).textContent = k >= N ? 'At your door' : `${Math.ceil((1 - k / N) * 16)} min`; if (k >= N) clearInterval(timer); }, 110);
-      $('#trk-done', el).onclick = async () => { try { await patch(`/api/pickups/${p.id}`, { status: 'completed' }); toast('Collected. Coins added.'); close(); after(); refreshMe().then(coinsChanged); } catch (e) { toast(e.message, 'err'); } };
-    },
-    onClose() { clearInterval(timer); map?.remove(); },
+
+// Collector view: requests near you, and your accepted jobs with live trip controls.
+async function collectorPickups(host) {
+  host.innerHTML = `${head('Pickups', 'Your rounds.', 'Accept pickups near you. When you set off, tap "I\'m leaving now": the seller sees your live location and exact arrival time until you reach their door.')}
+    <div class="grid-2">
+      <section class="card"><div class="card-head"><h2>Your jobs</h2></div><div id="cj" class="list"><p class="muted">Loading…</p></div></section>
+      <section class="card"><div class="card-head"><h2>Requests near you</h2><button class="link" id="cr-refresh" style="font-size:12px">${icon('route')}Refresh</button></div><div id="cr" class="list"><p class="muted">Finding requests…</p></div></section>
+    </div>`;
+  let jobs = [], reqs = [], poll;
+  const vehicleSel = (id) => `<select class="input" id="${id}" style="min-height:32px;padding:4px 10px;font-size:12.5px;width:auto">${Object.entries({ bike: 'Bike / scooter', van: 'Tempo / van', cycle: 'Cycle cart' }).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>`;
+  const loadJobs = async () => {
+    jobs = (await get('/api/pickups/jobs')).jobs.filter((j) => j.status !== 'cancelled');
+    $('#cj').innerHTML = jobs.length ? jobs.map((p) => { const st = statusLine(p);
+      const action = p.status === 'accepted' ? `<button class="btn btn-sm btn-primary" data-depart="${p.id}">${icon('navigate')}I'm leaving now</button><button class="btn btn-sm" data-release="${p.id}">Give up</button>`
+        : p.status === 'on_the_way' ? `<button class="btn btn-sm" data-trackme="${p.id}">Map</button><button class="btn btn-sm" data-arrive="${p.id}">I've arrived</button><button class="btn btn-sm btn-primary" data-complete="${p.id}">Collected</button>`
+        : p.status === 'arrived' ? `<button class="btn btn-sm btn-primary" data-complete="${p.id}">${icon('check')}Enter pickup code</button>`
+        : '<span class="tag ok">Done</span>';
+      return `<div class="li" style="grid-template-columns:auto 1fr"><span class="ico">${icon(p.status === 'completed' ? 'check' : 'truck')}</span>
+        <span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot} · ${esc(p.seller.name)}</div>
+        <div class="s">${esc(p.address || 'Pinned location')} · ${p.estKg} kg · ${(p.materials || []).map((m) => esc(matLabel(m).replace(/ \(\d\)/, ''))).join(', ')}</div>
+        <div class="s" style="color:${st.tag === 'ok' ? 'var(--ok)' : st.tag === 'warn' ? 'var(--warn)' : 'var(--muted)'}">${p.status === 'on_the_way' && p.eta ? `Sharing location · seller sees arrival at ${clock(p.eta.arriveAt)}` : st.text}${sharingId() === p.id ? ' · <b>live</b>' : ''}</div>
+        <div class="row" style="gap:6px;margin-top:8px">${action}${p.status !== 'completed' ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=${p.vehicle === 'cycle' ? 'bicycling' : p.vehicle === 'bike' ? 'two-wheeler' : 'driving'}">${icon('map')}Directions</a>` : ''}</div></span></div>`; }).join('')
+      : empty('No jobs yet. Accept a request near you to start.');
+  };
+  const loadReqs = async () => {
+    const loc = await locate();
+    reqs = (await get(`/api/pickups/requests?lat=${loc.lat}&lng=${loc.lng}`)).requests;
+    $('#cr').innerHTML = reqs.length ? reqs.map((p) => `<div class="li" style="grid-template-columns:auto 1fr"><span class="ico">${icon('pin')}</span>
+      <span style="min-width:0"><div class="t">${dayLabel(p.date)} · ${p.slot}</div>
+      <div class="s">${p.distanceKm != null ? `${p.distanceKm} km away · ` : ''}${p.estKg} kg · ${(p.materials || []).map((m) => esc(matLabel(m).replace(/ \(\d\)/, ''))).join(', ')}${p.greenRoute ? ' · <span style="color:var(--ok)">Green Route</span>' : ''}</div>
+      <div class="row" style="gap:6px;margin-top:8px">${vehicleSel('v-' + p.id)}<button class="btn btn-sm btn-primary" data-accept="${p.id}">Accept</button></div></span></div>`).join('')
+      : empty('No open requests within 15 km right now. New ones appear here as soon as someone books.');
+  };
+  const refresh = () => Promise.all([loadJobs(), loadReqs()]).catch((e) => toast(e.message, 'err'));
+  host.addEventListener('click', async (e) => {
+    const t = e.target.closest('[data-accept],[data-depart],[data-release],[data-arrive],[data-complete],[data-trackme]'); if (!t) return;
+    try {
+      if (t.dataset.accept) { setBusy(t, true); await post(`/api/pickups/${t.dataset.accept}/accept`, { vehicle: $('#v-' + t.dataset.accept)?.value }); toast('Accepted. Tap "I\'m leaving now" when you set off.'); return refresh(); }
+      if (t.dataset.depart) {
+        setBusy(t, true, 'Getting your location');
+        const pos = await currentPosition();
+        const { pickup } = await post(`/api/pickups/${t.dataset.depart}/depart`, pos);
+        await startSharing(pickup, () => loadJobs().catch(() => {}));
+        toast(pickup.eta ? `On your way. Arrival ${clock(pickup.eta.arriveAt)} sent to the seller.` : 'On your way. The seller can see you now.');
+        return loadJobs();
+      }
+      if (t.dataset.release) { await post(`/api/pickups/${t.dataset.release}/release`); if (sharingId() === t.dataset.release) stopSharing(); toast('Released. Another collector can take it.'); return refresh(); }
+      if (t.dataset.arrive) { await post(`/api/pickups/${t.dataset.arrive}/arrive`); toast('Marked as arrived. Ask the seller for their pickup code.'); return loadJobs(); }
+      if (t.dataset.trackme) return openTracker(t.dataset.trackme);
+      if (t.dataset.complete) {
+        const p = jobs.find((j) => j.id === t.dataset.complete);
+        sheet({ title: 'Collect.', sub: `${esc(p.seller.name)} · ${dayLabel(p.date)} ${p.slot}`, body: `<form class="stack" id="cc" novalidate>
+          <label class="field"><span>Seller's 4-digit pickup code</span><input class="input mono" id="cc-code" inputmode="numeric" maxlength="4" style="font-size:22px;letter-spacing:.3em"></label>
+          <label class="field"><span>Actual weight (kg)</span><input class="input" id="cc-kg" type="number" min="0.1" step="0.1" value="${p.estKg}"></label>
+          <button class="btn btn-primary btn-lg" type="submit" id="cc-go">Complete pickup ${icon('check')}</button></form>`,
+          onMount(el, close) { $('#cc', el).onsubmit = async (ev) => { ev.preventDefault(); const b = $('#cc-go', el); setBusy(b, true); try { await post(`/api/pickups/${p.id}/complete`, { code: $('#cc-code', el).value, kg: +$('#cc-kg', el).value }); if (sharingId() === p.id) stopSharing(); toast('Pickup complete. +15 EcoCoins'); close(); refresh(); refreshMe().then(coinsChanged); } catch (er) { setBusy(b, false); toast(er.message, 'err'); } }; } });
+      }
+    } catch (er) { setBusy(t, false); toast(er.message, 'err'); }
   });
+  $('#cr-refresh').onclick = () => loadReqs();
+  await refresh();
+  poll = setInterval(() => { if (!document.hidden && !$('.scrim')) refresh(); }, 25_000);
+  return () => clearInterval(poll);
 }
 export function tiles(map) {
   const dark = getComputedStyle(document.documentElement).colorScheme.includes('dark');

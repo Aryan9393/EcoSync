@@ -9,6 +9,7 @@ import * as Scan from './scan.js';
 import * as Maps from './maps.js';
 import * as Passport from './passport.js';
 import * as Bot from './bot.js';
+import { resumeSharing, stopSharing } from './tracking.js';
 
 const NAV = [
   ['home', 'Overview', 'home'], ['scan', 'Scanner', 'scan'], ['market', 'Market', 'market'], ['pickups', 'Pickups', 'truck'],
@@ -36,6 +37,7 @@ async function boot() {
   S.config = await detect();
   await refreshMe();
   if (!S.loc.approx || S.isApp) locate();
+  resumeSharing();
   addEventListener('hashchange', route);
   route();
   if ('serviceWorker' in navigator && backend === 'server' && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -116,6 +118,6 @@ function toggleTheme() {
   const t = dark ? 'light' : 'dark'; store.set('theme', t); applyTheme(t, true);
 }
 
-addEventListener('ecosync:signout', () => { signOutLocal(); location.hash = '#/'; toast('Signed out'); });
+addEventListener('ecosync:signout', () => { stopSharing(); signOutLocal(); location.hash = '#/'; toast('Signed out'); });
 addEventListener('ecosync:coins', () => { const c = S.wallet?.coins; $$('#top-right .num, #m-right .num').forEach((n) => (n.textContent = c ?? '—')); });
 boot();

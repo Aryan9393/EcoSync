@@ -20,6 +20,7 @@ import { PRICES, CO2_PER_KG, materialKey } from './lib/materials.js';
 import { findHubs } from './lib/hubs.js';
 import { TEST_IMAGE } from './lib/selftest-image.js';
 import { googleHubs, placesStatus } from './lib/places.js';
+import { routeEta, routingStatus } from './lib/eta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -282,27 +283,135 @@ app.get('/api/pickups/slots', wrap(async (req, res) => {
   const booked = await q(`SELECT slot, lat, lng FROM pickups WHERE date = $1 AND status <> 'cancelled'`, [date]);
   res.json({ slots: SLOTS.map((s) => { const near = booked.filter((b) => b.slot === s && km(here, b) < 2.5).length; return { slot: s, nearby: near, greenRoute: near > 0, full: near >= 12 }; }) });
 }));
-const pickupView = (p) => ({ id: p.id, date: p.date, slot: p.slot, lat: p.lat, lng: p.lng, address: p.address, materials: p.materials, estKg: p.est_kg, greenRoute: p.green_route, status: p.status, code: p.code, createdAt: ms(p.created_at) });
+// Pickup lifecycle: scheduled → accepted (a collector takes it) → on_the_way (collector confirms they've left and
+// shares live GPS) → arrived → completed (collector enters the seller's pickup code). No position or ETA is shown
+// until the collector has actually left and sent a real location.
+const LIVE = ['on_the_way', 'arrived'];
+const PSEL = `SELECT p.*, c.name AS collector_name, s.name AS seller_name FROM pickups p JOIN users s ON s.id = p.user_id LEFT JOIN users c ON c.id = p.collector_id`;
+function pickupView(p, viewer) {
+  const isSeller = viewer === p.user_id, isCollector = viewer && viewer === p.collector_id;
+  const base = {
+    id: p.id, date: p.date, slot: p.slot, materials: p.materials, estKg: p.est_kg, greenRoute: p.green_route, status: p.status,
+    vehicle: p.vehicle, createdAt: ms(p.created_at), acceptedAt: ms(p.accepted_at), departedAt: ms(p.departed_at), arrivedAt: ms(p.arrived_at), completedAt: ms(p.completed_at),
+    collector: p.collector_id ? { name: shortName(p.collector_name) } : null, seller: { name: shortName(p.seller_name) },
+    role: isSeller ? 'seller' : isCollector ? 'collector' : 'public',
+  };
+  if (isSeller) Object.assign(base, { lat: p.lat, lng: p.lng, address: p.address, code: p.code });
+  if (isCollector) Object.assign(base, { lat: p.lat, lng: p.lng, address: p.address }); // the code stays with the seller
+  if ((isSeller || isCollector) && LIVE.includes(p.status) && p.c_lat != null) {
+    base.live = { lat: p.c_lat, lng: p.c_lng, accuracy: p.c_acc, at: ms(p.c_at) };
+    if (p.eta_s != null) {
+      // Count down from when the ETA was computed, so the arrival time stays honest between updates.
+      const elapsed = Math.max(0, (Date.now() - ms(p.eta_at)) / 1000);
+      const left = Math.max(0, Math.round(p.eta_s - Math.min(elapsed, 120)));
+      base.eta = { seconds: p.status === 'arrived' ? 0 : left, meters: p.eta_m, source: p.eta_src, computedAt: ms(p.eta_at), arriveAt: p.status === 'arrived' ? ms(p.arrived_at) : Date.now() + left * 1000, polyline: p.eta_poly };
+    }
+  }
+  return base;
+}
 app.post('/api/pickups', auth, wrap(async (req, res) => {
   const b = req.body;
   if (!SLOTS.includes(b.slot) || !/^\d{4}-\d{2}-\d{2}$/.test(b.date || '')) return res.status(400).json({ error: 'Pick a day and a time slot.' });
-  const lat = num(b.lat, 28.6139), lng = num(b.lng, 77.209);
+  const lat = num(b.lat, NaN), lng = num(b.lng, NaN);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Turn on location so the collector can find you.' });
   const near = (await q(`SELECT lat, lng FROM pickups WHERE date = $1 AND slot = $2 AND status <> 'cancelled' AND user_id <> $3`, [b.date, b.slot, req.user.id])).filter((p) => km({ lat, lng }, p) < 2.5).length;
   const id = newId('pk');
   await q(`INSERT INTO pickups(id, user_id, date, slot, lat, lng, address, materials, est_kg, green_route, code) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [id, req.user.id, b.date, b.slot, lat, lng, clean(b.address, 160), JSON.stringify((b.materials || []).map(materialKey).slice(0, 8)), Math.max(0.5, num(b.estKg, 2)), near > 0, String(crypto.randomInt(1000, 9999))]);
   await award(req.user.id, near > 0 ? 35 : 10, near > 0 ? 'Pickup booked on a Green Route' : 'Pickup booked');
-  res.json({ pickup: pickupView(await one('SELECT * FROM pickups WHERE id = $1', [id])) });
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [id]), req.user.id) });
 }));
-app.get('/api/pickups/mine', auth, wrap(async (req, res) => res.json({ pickups: (await q('SELECT * FROM pickups WHERE user_id = $1 ORDER BY date DESC, created_at DESC LIMIT 50', [req.user.id])).map(pickupView) })));
+app.get('/api/pickups/mine', auth, wrap(async (req, res) => {
+  const rows = await q(`${PSEL} WHERE p.user_id = $1 ORDER BY p.date DESC, p.created_at DESC LIMIT 50`, [req.user.id]);
+  res.json({ pickups: rows.map((p) => pickupView(p, req.user.id)) });
+}));
+// Collector: open requests nearby (exact address hidden until accepted).
+app.get('/api/pickups/requests', auth, wrap(async (req, res) => {
+  const here = { lat: num(req.query.lat, NaN), lng: num(req.query.lng, NaN) };
+  const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const rows = await q(`${PSEL} WHERE p.status = 'scheduled' AND p.collector_id IS NULL AND p.date >= $1 AND p.user_id <> $2 ORDER BY p.date, p.slot LIMIT 200`, [today, req.user.id]);
+  const out = rows.map((p) => ({ ...pickupView(p, req.user.id), distanceKm: Number.isFinite(here.lat) ? +km(here, p).toFixed(1) : null }))
+    .filter((p) => p.distanceKm == null || p.distanceKm <= 15);
+  if (Number.isFinite(here.lat)) out.sort((a, b) => (a.date + a.slot).localeCompare(b.date + b.slot) || a.distanceKm - b.distanceKm);
+  res.json({ requests: out.slice(0, 50) });
+}));
+app.get('/api/pickups/jobs', auth, wrap(async (req, res) => {
+  const rows = await q(`${PSEL} WHERE p.collector_id = $1 ORDER BY (p.status IN ('on_the_way','arrived')) DESC, p.date, p.slot LIMIT 50`, [req.user.id]);
+  res.json({ jobs: rows.map((p) => pickupView(p, req.user.id)) });
+}));
+async function mine(req, res, as) {
+  const p = await one(`${PSEL} WHERE p.id = $1`, [req.params.id]);
+  if (!p) { res.status(404).json({ error: 'Pickup not found.' }); return null; }
+  if (as === 'collector' && p.collector_id !== req.user.id) { res.status(403).json({ error: 'This pickup is assigned to another collector.' }); return null; }
+  if (as === 'party' && p.collector_id !== req.user.id && p.user_id !== req.user.id) { res.status(403).json({ error: 'You are not part of this pickup.' }); return null; }
+  return p;
+}
+const okLatLng = (b) => Number.isFinite(num(b.lat, NaN)) && Number.isFinite(num(b.lng, NaN)) && Math.abs(b.lat) <= 90 && Math.abs(b.lng) <= 180;
+async function refreshEta(id, from, force = false) {
+  const p = await one('SELECT * FROM pickups WHERE id = $1', [id]);
+  const moved = p.eta_lat == null ? Infinity : km(from, { lat: p.eta_lat, lng: p.eta_lng }) * 1000;
+  const age = p.eta_at ? (Date.now() - ms(p.eta_at)) / 1000 : Infinity;
+  if (!force && age < 45 && moved < 150) return; // keep routing calls modest
+  const r = await routeEta(from, { lat: p.lat, lng: p.lng }, p.vehicle);
+  await q('UPDATE pickups SET eta_s = $2, eta_m = $3, eta_src = $4, eta_poly = $5, eta_at = now(), eta_lat = $6, eta_lng = $7 WHERE id = $1', [id, r.seconds, r.meters, r.source, r.polyline, from.lat, from.lng]);
+}
+app.post('/api/pickups/:id/accept', auth, wrap(async (req, res) => {
+  const vehicle = ['bike', 'van', 'cycle'].includes(req.body.vehicle) ? req.body.vehicle : 'bike';
+  const upd = await q(`UPDATE pickups SET collector_id = $2, status = 'accepted', accepted_at = now(), vehicle = $3 WHERE id = $1 AND status = 'scheduled' AND collector_id IS NULL AND user_id <> $2 RETURNING id`, [req.params.id, req.user.id, vehicle]);
+  if (!upd.length) return res.status(409).json({ error: 'Another collector already took this pickup.' });
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [req.params.id]), req.user.id) });
+}));
+app.post('/api/pickups/:id/release', auth, wrap(async (req, res) => {
+  const p = await mine(req, res, 'collector'); if (!p) return;
+  if (p.status === 'completed') return res.status(400).json({ error: 'This pickup is already complete.' });
+  await q(`UPDATE pickups SET collector_id = NULL, status = 'scheduled', accepted_at = NULL, departed_at = NULL, arrived_at = NULL, c_lat = NULL, c_lng = NULL, c_at = NULL, eta_s = NULL, eta_at = NULL, eta_poly = NULL, eta_lat = NULL, eta_lng = NULL WHERE id = $1`, [p.id]);
+  res.json({ ok: true });
+}));
+app.post('/api/pickups/:id/depart', auth, wrap(async (req, res) => {
+  const p = await mine(req, res, 'collector'); if (!p) return;
+  if (p.status !== 'accepted') return res.status(400).json({ error: p.status === 'scheduled' ? 'Accept the pickup first.' : 'You have already left for this pickup.' });
+  if (!okLatLng(req.body)) return res.status(400).json({ error: 'Your location is needed to start. Allow location access and try again.' });
+  const from = { lat: +req.body.lat, lng: +req.body.lng };
+  await q(`UPDATE pickups SET status = 'on_the_way', departed_at = now(), c_lat = $2, c_lng = $3, c_acc = $4, c_at = now() WHERE id = $1`, [p.id, from.lat, from.lng, num(req.body.accuracy, null)]);
+  await refreshEta(p.id, from, true);
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [p.id]), req.user.id) });
+}));
+app.post('/api/pickups/:id/location', auth, limit('loc', 30), wrap(async (req, res) => {
+  const p = await mine(req, res, 'collector'); if (!p) return;
+  if (!LIVE.includes(p.status)) return res.status(400).json({ error: 'Location sharing has ended for this pickup.' });
+  if (!okLatLng(req.body)) return res.status(400).json({ error: 'Invalid location.' });
+  const from = { lat: +req.body.lat, lng: +req.body.lng };
+  await q('UPDATE pickups SET c_lat = $2, c_lng = $3, c_acc = $4, c_at = now() WHERE id = $1', [p.id, from.lat, from.lng, num(req.body.accuracy, null)]);
+  // Within ~80 m of the door counts as arrived.
+  if (p.status === 'on_the_way' && km(from, p) * 1000 <= 80) await q(`UPDATE pickups SET status = 'arrived', arrived_at = now(), eta_s = 0, eta_at = now() WHERE id = $1`, [p.id]);
+  else if (p.status === 'on_the_way') await refreshEta(p.id, from);
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [p.id]), req.user.id) });
+}));
+app.post('/api/pickups/:id/arrive', auth, wrap(async (req, res) => {
+  const p = await mine(req, res, 'collector'); if (!p) return;
+  if (p.status !== 'on_the_way') return res.status(400).json({ error: 'Tap "I\'m leaving now" first.' });
+  await q(`UPDATE pickups SET status = 'arrived', arrived_at = now(), eta_s = 0, eta_at = now() WHERE id = $1`, [p.id]);
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [p.id]), req.user.id) });
+}));
+app.post('/api/pickups/:id/complete', auth, wrap(async (req, res) => {
+  const p = await mine(req, res, 'collector'); if (!p) return;
+  if (!LIVE.includes(p.status)) return res.status(400).json({ error: 'Start the trip before completing the pickup.' });
+  if (String(req.body.code || '').trim() !== p.code) return res.status(400).json({ error: 'That pickup code is wrong. Ask the seller for the 4-digit code in their app.' });
+  const kgv = Math.max(0.1, num(req.body.kg, p.est_kg));
+  await q(`UPDATE pickups SET status = 'completed', completed_at = now(), est_kg = $2, c_lat = NULL, c_lng = NULL WHERE id = $1`, [p.id, kgv]);
+  await award(p.user_id, Math.round(kgv * 8), 'Pickup collected', kgv, +(kgv * 1.2).toFixed(2));
+  await award(req.user.id, 15, 'Completed a pickup');
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [p.id]), req.user.id) });
+}));
+app.get('/api/pickups/:id/track', auth, wrap(async (req, res) => {
+  const p = await mine(req, res, 'party'); if (!p) return;
+  res.json({ pickup: pickupView(p, req.user.id) });
+}));
 app.patch('/api/pickups/:id', auth, wrap(async (req, res) => {
   const p = await one('SELECT * FROM pickups WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
   if (!p) return res.status(404).json({ error: 'Pickup not found.' });
-  if (p.status === 'scheduled' && ['cancelled', 'completed'].includes(req.body.status)) {
-    await q('UPDATE pickups SET status = $2 WHERE id = $1', [p.id, req.body.status]);
-    if (req.body.status === 'completed') await award(req.user.id, Math.round(p.est_kg * 8), 'Pickup completed', p.est_kg, +(p.est_kg * 1.2).toFixed(2));
-  }
-  res.json({ pickup: pickupView(await one('SELECT * FROM pickups WHERE id = $1', [p.id])) });
+  if (req.body.status === 'cancelled' && ['scheduled', 'accepted', 'on_the_way'].includes(p.status)) await q(`UPDATE pickups SET status = 'cancelled', c_lat = NULL, c_lng = NULL WHERE id = $1`, [p.id]);
+  res.json({ pickup: pickupView(await one(`${PSEL} WHERE p.id = $1`, [p.id]), req.user.id) });
 }));
 
 // ---------- litter reports (3D map) ----------
@@ -369,4 +478,5 @@ app.listen(PORT, () => {
   console.log(`EcoSync on http://localhost:${PORT} · database: ${dbMode} · AI: ${aiEnabled() ? 'gemini' : 'on-device'}`);
   // Startup self-check of the database. Gemini and Places are only tested via /api/status?deep=1 so deploys don't use up API quota.
   setTimeout(() => fetch(`http://localhost:${PORT}/api/status?fresh=1`).then((r) => r.json()).then((j) => console.log('Self-check', JSON.stringify(j))).catch((e) => console.log('Self-check failed', e.message)), 1500);
+  setTimeout(() => routeEta({ lat: 28.6139, lng: 77.209 }, { lat: 28.6304, lng: 77.2177 }, 'bike').then((r) => console.log('Routing check', JSON.stringify({ source: r.source, minutes: Math.round(r.seconds / 60), km: +(r.meters / 1000).toFixed(1), google: routingStatus }))).catch((e) => console.log('Routing check failed', e.message)), 2500);
 });

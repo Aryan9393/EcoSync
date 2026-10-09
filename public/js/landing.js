@@ -6,7 +6,7 @@ import { backend, BASE, store } from './api.js';
 const STEPS = [
   ['scan', 'Scan it', 'Point your camera. The scanner names the material and its price per kilo.'],
   ['market', 'List it', 'Collectors nearby see it straight away. Or just say it, in Hindi.'],
-  ['pickup', 'Book it', 'Pick a day and a slot. A leaf means a van is already passing.'],
+  ['pickup', 'Book it', 'Pick a slot. When the collector sets off, follow them live.'],
   ['passport', 'Hand it over', 'The collector scans your QR. The sale is done, the money is yours.'],
   ['coins', 'Trace it', 'Follow it to the hub and into something new. Earn as you go.'],
 ];
@@ -115,7 +115,7 @@ export function landingHtml() {
       <div>
         <span class="eyebrow plain">Small acts, counted</span>
         <h2>Less waste.<br>More worth.</h2>
-        <p class="lead">Every listing, pickup and cleaned-up corner adds EcoCoins. Book when a van is already nearby and you earn more, because the trip was going to happen anyway.</p>
+        <p class="lead">Every listing, pickup and cleaned-up corner adds EcoCoins. Book a slot where another pickup is already nearby and you earn more, because the trip is shared.</p>
         <p class="lead" style="margin-top:10px;font-size:12.5px">Ask EcoBot anything, in Hindi or English. Turn coins into saplings, metro top-ups and notebooks.</p>
       </div>
       <div class="mock-wrap tilt">${mockup('coins')}${scribbleEllipse('', [44, 30, 70, 22])}</div>
